@@ -91,7 +91,10 @@ while total_timesteps < args.max_timesteps:
     if total_timesteps < args.start_timesteps:
         action = env.action_space.sample()
     else:
-        action = policy.predict(np.array(obs))
+        lane_pose = local_env.get_lane_pos2(local_env.cur_pos, local_env.cur_angle)
+        dist = lane_pose.dist        # Distance to lane center. Left is negative, right is positive.
+        angle = lane_pose.angle_rad  # Angle from straight, in radians. Left is negative, right is positive.
+        action = policy.predict(np.array(obs), dist, angle)
         if args.expl_noise != 0:
             action = (action + np.random.normal(
                 0,
@@ -101,6 +104,9 @@ while total_timesteps < args.max_timesteps:
 
     # Perform action
     new_obs, reward, done, _ = env.step(action)
+    lane_pose = local_env.get_lane_pos2(local_env.cur_pos, local_env.cur_angle)
+    next_dist = lane_pose.dist        # Distance to lane center. Left is negative, right is positive.
+    next_angle = lane_pose.angle_rad  # Angle from straight, in radians. Left is negative, right is positive.
 
     if episode_timesteps >= args.env_timesteps:
         done = True
@@ -109,7 +115,7 @@ while total_timesteps < args.max_timesteps:
     episode_reward += reward
 
     # Store data in replay buffer
-    replay_buffer.add(obs, new_obs, action, reward, done_bool)
+    replay_buffer.add(obs, new_obs, action, reward, done_bool, dist, angle, next_dist, next_angle)
 
     obs = new_obs
 
@@ -120,6 +126,7 @@ while total_timesteps < args.max_timesteps:
 # Final evaluation
 evaluations.append(evaluate_policy(env, policy))
 
+
 if args.save_models:
     policy.save(file_name, directory="./pytorch_models")
-np.savez("./results/{}.npz".format(file_name),evaluations)
+np.savez("./pytorch_models/{}.npz".format(file_name),evaluations)

@@ -1,5 +1,6 @@
 import functools
 import operator
+from controller import Controller
 
 import numpy as np
 import torch
@@ -16,8 +17,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class ActorDense(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
         super(ActorDense, self).__init__()
+        
+        self.controller = Controller()
 
         state_dim = functools.reduce(operator.mul, state_dim, 1)
+        
 
         self.l1 = nn.Linear(state_dim, 400)
         self.l2 = nn.Linear(400, 300)
@@ -27,10 +31,13 @@ class ActorDense(nn.Module):
 
         self.tanh = nn.Tanh()
 
-    def forward(self, x):
+    def forward(self, x, dist, angle):
+        
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
         x = self.max_action * self.tanh(self.l3(x))
+        x[:,1] += self.controller.angle_control_commands(dist, angle)
+        
         return x
 
 
@@ -38,6 +45,8 @@ class ActorCNN(nn.Module):
     def __init__(self, action_dim, max_action):
         super(ActorCNN, self).__init__()
 
+        self.controller = Controller()
+        
         # ONLY TRU IN CASE OF DUCKIETOWN:
         flat_size = 32 * 9 * 14
 
@@ -62,7 +71,7 @@ class ActorCNN(nn.Module):
 
         self.max_action = max_action
 
-    def forward(self, x):
+    def forward(self, x, dist, angle):
         x = self.bn1(self.lr(self.conv1(x)))
         x = self.bn2(self.lr(self.conv2(x)))
         x = self.bn3(self.lr(self.conv3(x)))
@@ -79,6 +88,8 @@ class ActorCNN(nn.Module):
         x = self.lin2(x)
         x[:, 0] = self.max_action * self.sigm(x[:, 0])  # because we don't want the duckie to go backwards
         x[:, 1] = self.tanh(x[:, 1])
+        x[:,1] += torch.FloatTensor(self.controller.angle_control_commands(dist, angle, x[:, 0].data.numpy()))
+        
 
         return x
 
@@ -165,8 +176,7 @@ class DDPG(object):
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters())
 
-    def predict(self, state):
-
+    def predict(self, state, dist, angle):
         # just making sure the state has the correct format, otherwise the prediction doesn't work
         assert state.shape[0] == 3
 
@@ -174,7 +184,8 @@ class DDPG(object):
             state = torch.FloatTensor(state.reshape(1, -1)).to(device)
         else:
             state = torch.FloatTensor(np.expand_dims(state, axis=0)).to(device)
-        return self.actor(state).cpu().data.numpy().flatten()
+        
+        return self.actor(state, dist, angle).cpu().data.numpy().flatten()
 
     def train(self, replay_buffer, iterations, batch_size=64, discount=0.99, tau=0.001):
 
@@ -187,9 +198,15 @@ class DDPG(object):
             next_state = torch.FloatTensor(sample["next_state"]).to(device)
             done = torch.FloatTensor(1 - sample["done"]).to(device)
             reward = torch.FloatTensor(sample["reward"]).to(device)
+            
+            dist = sample["dist"]
+            angle = sample["angle"]
+            
+            next_dist = sample["next_dist"]
+            next_angle = sample["next_angle"]            
 
             # Compute the target Q value
-            target_Q = self.critic_target(next_state, self.actor_target(next_state))
+            target_Q = self.critic_target(next_state, self.actor_target(next_state, next_dist, next_angle))
             target_Q = reward + (done * discount * target_Q).detach()
 
             # Get current Q estimate
@@ -204,7 +221,7 @@ class DDPG(object):
             self.critic_optimizer.step()
 
             # Compute actor loss
-            actor_loss = -self.critic(state, self.actor(state)).mean()
+            actor_loss = -self.critic(state, self.actor(state, dist, angle)).mean()
 
             # Optimize the actor
             self.actor_optimizer.zero_grad()

@@ -44,7 +44,10 @@ with torch.no_grad():
         env.render()
         rewards = []
         while True:
-            action = policy.predict(np.array(obs))
+            lane_pose = env.get_lane_pos2(env.cur_pos, env.cur_angle)
+            dist = lane_pose.dist        # Distance to lane center. Left is negative, right is positive.
+            angle = lane_pose.angle_rad  # Angle from straight, in radians. Left is negative, right is positive.
+            action = policy.predict(np.array(obs), dist, angle)
             obs, rew, done, misc = env.step(action)
             rewards.append(rew)
             env.render()
