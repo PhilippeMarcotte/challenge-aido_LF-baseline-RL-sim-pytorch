@@ -14,9 +14,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Paper: https://arxiv.org/abs/1509.02971
 
 
-class ActorDense(nn.Module):
+class ActorPID(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
-        super(ActorDense, self).__init__()
+        super(ActorPID, self).__init__()
         
         self.controller = Controller()
 
@@ -33,10 +33,12 @@ class ActorDense(nn.Module):
 
     def forward(self, x, dist, angle):
         
-        x = F.relu(self.l1(x))
-        x = F.relu(self.l2(x))
-        x = self.max_action * self.tanh(self.l3(x))
-        x[:,1] += self.controller.angle_control_commands(dist, angle)
+        x = torch.zeros(x.shape[0], 2) 
+        x[:,0]=0.5 * torch.ones_like(dist.squeeze())
+        x=x.to(device)
+
+
+        x[:,1] += self.controller.angle_control_commands(dist.squeeze(), angle.squeeze(), x[:, 0])
         
         return x
 
@@ -71,24 +73,31 @@ class ActorCNN(nn.Module):
 
         self.max_action = max_action
 
-    def forward(self, x, dist, angle):
-        x = self.bn1(self.lr(self.conv1(x)))
-        x = self.bn2(self.lr(self.conv2(x)))
-        x = self.bn3(self.lr(self.conv3(x)))
-        x = self.bn4(self.lr(self.conv4(x)))
-        x = x.view(x.size(0), -1)  # flatten
-        x = self.dropout(x)
-        x = self.lr(self.lin1(x))
+    def forward(self, x, dist, angle, only_PID=False):
+        if not only_PID:
+            x = self.bn1(self.lr(self.conv1(x)))
+            x = self.bn2(self.lr(self.conv2(x)))
+            x = self.bn3(self.lr(self.conv3(x)))
+            x = self.bn4(self.lr(self.conv4(x)))
+            x = x.view(x.size(0), -1)  # flatten
+            x = self.dropout(x)
+            x = self.lr(self.lin1(x))
 
-        # this is the vanilla implementation
-        # but we're using a slightly different one
-        # x = self.max_action * self.tanh(self.lin2(x))
+            # this is the vanilla implementation
+            # but we're using a slightly different one
+            # x = self.max_action * self.tanh(self.lin2(x))
 
-        # because we don't want our duckie to go backwards
-        x = self.lin2(x)
-        x[:, 0] = self.max_action * self.sigm(x[:, 0])  # because we don't want the duckie to go backwards
-        x[:, 1] = self.tanh(x[:, 1])
-        x[:,1] += torch.FloatTensor(self.controller.angle_control_commands(dist, angle, x[:, 0].data.numpy()))
+            # because we don't want our duckie to go backwards
+            x = self.lin2(x)
+            x[:, 0] = 0.5 + self.max_action * self.sigm(x[:, 0])  # because we don't want the duckie to go backwards
+            x[:, 1] = self.tanh(x[:, 1])
+        else:
+            x = torch.zeros(x.shape[0], 2) 
+            x[:,0]=0.5 * torch.ones_like(dist.squeeze())
+            x=x.to(device)
+
+
+        x[:,1] += self.controller.angle_control_commands(dist.squeeze(), angle.squeeze(), x[:, 0])
         
 
         return x
@@ -149,16 +158,16 @@ class CriticCNN(nn.Module):
 
 
 class DDPG(object):
-    def __init__(self, state_dim, action_dim, max_action, net_type):
+    def __init__(self, state_dim, action_dim, max_action, net_type="cnn", critic_chkp=None):
         super(DDPG, self).__init__()
-        assert net_type in ["cnn", "dense"]
+        assert net_type in ["cnn", "pid"]
 
         self.state_dim = state_dim
 
-        if net_type == "dense":
-            self.flat = True
-            self.actor = ActorDense(state_dim, action_dim, max_action).to(device)
-            self.actor_target = ActorDense(state_dim, action_dim, max_action).to(device)
+        if net_type == "pid":
+            self.flat = False
+            self.actor = ActorPID(state_dim, action_dim, max_action).to(device)
+            self.actor_target = ActorPID(state_dim, action_dim, max_action).to(device)
         else:
             self.flat = False
             self.actor = ActorCNN(action_dim, max_action).to(device)
@@ -167,25 +176,28 @@ class DDPG(object):
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=1e-4)
 
-        if net_type == "dense":
-            self.critic = CriticDense(state_dim, action_dim).to(device)
-            self.critic_target = CriticDense(state_dim, action_dim).to(device)
-        else:
-            self.critic = CriticCNN(action_dim).to(device)
-            self.critic_target = CriticCNN(action_dim).to(device)
+        self.critic = CriticCNN(action_dim).to(device)
+        if critic_chkp:
+            self.critic.load_state_dict(torch.load(critic_chkp))
+            
+        self.critic_target = CriticCNN(action_dim).to(device)
+    
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters())
 
-    def predict(self, state, dist, angle):
+    def predict(self, state, dist, angle, only_pid=False):
         # just making sure the state has the correct format, otherwise the prediction doesn't work
         assert state.shape[0] == 3
+
+        dist = torch.FloatTensor(dist).to(device)
+        angle = torch.FloatTensor(angle).to(device)
 
         if self.flat:
             state = torch.FloatTensor(state.reshape(1, -1)).to(device)
         else:
             state = torch.FloatTensor(np.expand_dims(state, axis=0)).to(device)
         
-        return self.actor(state, dist, angle).cpu().data.numpy().flatten()
+        return self.actor(state, dist, angle, only_pid).cpu().data.numpy().flatten()
 
     def train(self, replay_buffer, iterations, batch_size=64, discount=0.99, tau=0.001):
 
@@ -199,11 +211,11 @@ class DDPG(object):
             done = torch.FloatTensor(1 - sample["done"]).to(device)
             reward = torch.FloatTensor(sample["reward"]).to(device)
             
-            dist = sample["dist"]
-            angle = sample["angle"]
+            dist = torch.FloatTensor(sample["dist"]).to(device)
+            angle = torch.FloatTensor(sample["angle"]).to(device)
             
-            next_dist = sample["next_dist"]
-            next_angle = sample["next_angle"]            
+            next_dist = torch.FloatTensor(sample["next_dist"]).to(device)
+            next_angle = torch.FloatTensor(sample["next_angle"]).to(device)
 
             # Compute the target Q value
             target_Q = self.critic_target(next_state, self.actor_target(next_state, next_dist, next_angle))

@@ -66,7 +66,7 @@ class ReplayBuffer(object):
         }
 
 
-def evaluate_policy(env, policy, eval_episodes=10, max_timesteps=500):
+def evaluate_policy(env, policy, device, eval_episodes=10, max_timesteps=500):
     avg_reward = 0.
     for _ in range(eval_episodes):
         obs = env.reset()
@@ -76,7 +76,7 @@ def evaluate_policy(env, policy, eval_episodes=10, max_timesteps=500):
             lane_pose = env.get_lane_pos2(env.cur_pos, env.cur_angle)
             dist = lane_pose.dist        # Distance to lane center. Left is negative, right is positive.
             angle = lane_pose.angle_rad  # Angle from straight, in radians. Left is negative, right is positive.
-            action = policy.predict(np.array(obs), dist, angle)
+            action = policy.predict(np.array(obs), np.array(dist), np.array(angle))
             obs, reward, done, _ = env.step(action)
             avg_reward += reward
             step += 1

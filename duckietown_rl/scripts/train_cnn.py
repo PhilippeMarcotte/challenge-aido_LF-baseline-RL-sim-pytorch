@@ -12,6 +12,8 @@ from utils import seed, evaluate_policy, ReplayBuffer
 from wrappers import NormalizeWrapper, ImgWrapper, \
     DtRewardWrapper, ActionWrapper, ResizeWrapper
 from env import launch_env
+import logging
+
 
 policy_name = "DDPG"
 
@@ -31,6 +33,9 @@ if args.save_models and not os.path.exists("./pytorch_models"):
 
 env = launch_env()
 
+logging.getLogger('gym-duckietown').setLevel(logging.ERROR)
+
+
 # Wrappers
 env = ResizeWrapper(env)
 env = NormalizeWrapper(env)
@@ -48,12 +53,15 @@ max_action = float(env.action_space.high[0])
 
 
 # Initialize policy
-policy = DDPG(state_dim, action_dim, max_action, net_type="cnn")
+
+policy = DDPG(state_dim, action_dim, max_action)
 
 replay_buffer = ReplayBuffer(args.replay_buffer_max_size)
 
 # Evaluate untrained policy
-evaluations= [evaluate_policy(env, policy)]
+print('before')
+evaluations= [evaluate_policy(env, policy, device)]
+print('after t\'es lourd')
 
 total_timesteps = 0
 timesteps_since_eval = 0
@@ -62,7 +70,6 @@ done = True
 episode_reward = None
 env_counter = 0
 while total_timesteps < args.max_timesteps:
-
     if done:
 
         if total_timesteps != 0:
@@ -73,7 +80,7 @@ while total_timesteps < args.max_timesteps:
         # Evaluate episode
         if timesteps_since_eval >= args.eval_freq:
             timesteps_since_eval %= args.eval_freq
-            evaluations.append(evaluate_policy(env, policy))
+            evaluations.append(evaluate_policy(env, policy, device))
 
             if args.save_models:
                 policy.save(file_name, directory="./pytorch_models")
@@ -87,14 +94,15 @@ while total_timesteps < args.max_timesteps:
         episode_timesteps = 0
         episode_num += 1
 
+    lane_pose = env.get_lane_pos2(env.cur_pos, env.cur_angle)
+    dist = lane_pose.dist        # Distance to lane center. Left is negative, right is positive.
+    angle = lane_pose.angle_rad  # Angle from straight, in radians. Left is negative, right is positive.
     # Select action randomly or according to policy
     if total_timesteps < args.start_timesteps:
         action = env.action_space.sample()
     else:
-        lane_pose = local_env.get_lane_pos2(local_env.cur_pos, local_env.cur_angle)
-        dist = lane_pose.dist        # Distance to lane center. Left is negative, right is positive.
-        angle = lane_pose.angle_rad  # Angle from straight, in radians. Left is negative, right is positive.
-        action = policy.predict(np.array(obs), dist, angle)
+        action = policy.predict(np.array(obs), np.array(dist), np.array(angle),
+         only_pid=total_timesteps-args.start_timesteps<args.pid_timesteps)
         if args.expl_noise != 0:
             action = (action + np.random.normal(
                 0,
@@ -104,8 +112,8 @@ while total_timesteps < args.max_timesteps:
 
     # Perform action
     new_obs, reward, done, _ = env.step(action)
-    lane_pose = local_env.get_lane_pos2(local_env.cur_pos, local_env.cur_angle)
-    next_dist = lane_pose.dist        # Distance to lane center. Left is negative, right is positive.
+    lane_pose = env.get_lane_pos2(env.cur_pos, env.cur_angle)
+    next_dist = lane_pose.dist       # Distance to lane center. Left is negative, right is positive.
     next_angle = lane_pose.angle_rad  # Angle from straight, in radians. Left is negative, right is positive.
 
     if episode_timesteps >= args.env_timesteps:
@@ -124,7 +132,7 @@ while total_timesteps < args.max_timesteps:
     timesteps_since_eval += 1
 
 # Final evaluation
-evaluations.append(evaluate_policy(env, policy))
+evaluations.append(evaluate_policy(env, policy, device))
 
 
 if args.save_models:
