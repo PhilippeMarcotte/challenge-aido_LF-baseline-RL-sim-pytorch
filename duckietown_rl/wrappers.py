@@ -81,7 +81,7 @@ class SteeringToWheelVelWrapper(gym.ActionWrapper):
 
     def __init__(self,
                  env,
-                 gain=1.0,
+                 gain=0.6, #1.0,
                  trim=0.0,
                  radius=0.0318,
                  k=27.0,

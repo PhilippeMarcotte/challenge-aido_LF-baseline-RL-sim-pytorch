@@ -1,6 +1,6 @@
 import functools
 import operator
-from controller import Controller
+from controller_baseline import Controller
 
 import numpy as np
 import torch
