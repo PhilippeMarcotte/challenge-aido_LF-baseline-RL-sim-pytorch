@@ -8,7 +8,8 @@ def launch_env(id=None):
         env = Simulator(
             seed=123, # random seed
             map_name="loop_empty",
-            max_steps=500001, # we don't want the gym to reset itself
+            # it is important to set to the max length of one episode for the video recording
+            max_steps=500, # we don't want the gym to reset itself
             domain_rand=0,
             camera_width=640,
             camera_height=480,

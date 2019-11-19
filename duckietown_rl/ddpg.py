@@ -34,11 +34,11 @@ class ActorPID(nn.Module):
     def forward(self, x, dist, angle):
         
         x = torch.zeros(x.shape[0], 2) 
-        x[:,0]=0.5 * torch.ones_like(dist.squeeze())
+        # x[:,0]=0.5 * torch.ones_like(dist.squeeze())
         x=x.to(device)
 
 
-        x[:,1] += self.controller.angle_control_commands(dist.squeeze(), angle.squeeze(), x[:, 0])
+        x += self.controller.angle_control_commands(dist.squeeze(), angle.squeeze())
         
         return x
 
@@ -89,15 +89,15 @@ class ActorCNN(nn.Module):
 
             # because we don't want our duckie to go backwards
             x = self.lin2(x)
-            x[:, 0] = 0.5 + self.max_action * self.sigm(x[:, 0])  # because we don't want the duckie to go backwards
+            x[:, 0] = self.max_action * self.sigm(x[:, 0])  # because we don't want the duckie to go backwards
             x[:, 1] = self.tanh(x[:, 1])
         else:
             x = torch.zeros(x.shape[0], 2) 
-            x[:,0]=0.5 * torch.ones_like(dist.squeeze())
+            # x[:,0]=0.5 * torch.ones_like(dist.squeeze())
             x=x.to(device)
 
 
-        x[:,1] += self.controller.angle_control_commands(dist.squeeze(), angle.squeeze(), x[:, 0])
+        x += self.controller.angle_control_commands(dist.squeeze(), angle.squeeze())
         
 
         return x

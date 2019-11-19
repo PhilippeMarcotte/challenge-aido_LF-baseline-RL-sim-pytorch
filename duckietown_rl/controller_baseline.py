@@ -1,6 +1,9 @@
-import math
+# import math
 import time
 import numpy as np
+import torch
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Controller:
     def __init__(self):
@@ -53,40 +56,44 @@ class Controller:
         self.cross_track_err = d - self.d_offset
         self.heading_err = phi
 
-        v = self.v_bar
+        v = self.v_bar * torch.ones_like(d).to(device)
 
-        if v > self.actuator_limits_v:
-            v = self.actuator_limits_v
+        v[v > self.actuator_limits_v]=self.actuator_limits_v
 
-        if math.fabs(self.cross_track_err) > self.d_thres:
-            print("inside threshold ")
-            self.cross_track_err = self.cross_track_err / math.fabs(self.cross_track_err) * self.d_thres
+        # if v > self.actuator_limits_v:
+        #     v = self.actuator_limits_v
+        idx_thresh=torch.abs(self.cross_track_err) > self.d_thres
+
+        self.cross_track_err[idx_thresh] /= torch.abs(self.cross_track_err[idx_thresh]) * self.d_thres
+        
+        # if torch.abs(self.cross_track_err) > self.d_thres:
+        #     self.cross_track_err = self.cross_track_err / torch.abs(self.cross_track_err) * self.d_thres
 
         currentMillis = int(round(time.time() * 1000))
 
-        if self.last_ms is not None:
-            dt = (currentMillis - self.last_ms) / 1000.0
-            self.cross_track_integral += self.cross_track_err * dt
-            self.heading_integral += self.heading_err * dt
+        # if self.last_ms is not None:
+        #     dt = (currentMillis - self.last_ms) / 1000.0
+        #     self.cross_track_integral += self.cross_track_err * dt
+        #     self.heading_integral += self.heading_err * dt
 
-        if self.cross_track_integral > self.cross_track_integral_top_cutoff:
-            self.cross_track_integral = self.cross_track_integral_top_cutoff
-        if self.cross_track_integral < self.cross_track_integral_bottom_cutoff:
-            self.cross_track_integral = self.cross_track_integral_bottom_cutoff
+        # if self.cross_track_integral > self.cross_track_integral_top_cutoff:
+        #     self.cross_track_integral = self.cross_track_integral_top_cutoff
+        # if self.cross_track_integral < self.cross_track_integral_bottom_cutoff:
+        #     self.cross_track_integral = self.cross_track_integral_bottom_cutoff
 
-        if self.heading_integral > self.heading_integral_top_cutoff:
-            self.heading_integral = self.heading_integral_top_cutoff
-        if self.heading_integral < self.heading_integral_bottom_cutoff:
-            self.heading_integral = self.heading_integral_bottom_cutoff
+        # if self.heading_integral > self.heading_integral_top_cutoff:
+        #     self.heading_integral = self.heading_integral_top_cutoff
+        # if self.heading_integral < self.heading_integral_bottom_cutoff:
+        #     self.heading_integral = self.heading_integral_bottom_cutoff
 
-        if abs(self.cross_track_err) <= 0.011:  # TODO: replace '<= 0.011' by '< delta_d' (but delta_d might need to be sent by the lane_filter_node.py or even lane_filter.py)
-            self.cross_track_integral = 0
-        if abs(self.heading_err) <= 0.051:  # TODO: replace '<= 0.051' by '< delta_phi' (but delta_phi might need to be sent by the lane_filter_node.py or even lane_filter.py)
-            self.heading_integral = 0
-        if np.sign(self.cross_track_err) != np.sign(prev_cross_track_err):  # sign of error changed => error passed zero
-            self.cross_track_integral = 0
-        if np.sign(self.heading_err) != np.sign(prev_heading_err):  # sign of error changed => error passed zero
-            self.heading_integral = 0
+        # if abs(self.cross_track_err) <= 0.011:  # TODO: replace '<= 0.011' by '< delta_d' (but delta_d might need to be sent by the lane_filter_node.py or even lane_filter.py)
+        #     self.cross_track_integral = 0
+        # if abs(self.heading_err) <= 0.051:  # TODO: replace '<= 0.051' by '< delta_phi' (but delta_phi might need to be sent by the lane_filter_node.py or even lane_filter.py)
+        #     self.heading_integral = 0
+        # if torch.sign(self.cross_track_err) != torch.sign(prev_cross_track_err):  # sign of error changed => error passed zero
+        #     self.cross_track_integral = 0
+        # if torch.sign(self.heading_err) != torch.sign(prev_heading_err):  # sign of error changed => error passed zero
+        #     self.heading_integral = 0
 
         omega_feedforward = v * curvature_ref
         if self.main_pose_source == "lane_filter" and not self.use_feedforward_part:
@@ -97,35 +104,46 @@ class Controller:
         omega += (omega_feedforward)
 
         # check if nominal omega satisfies min radius, otherwise constrain it to minimal radius
-        if math.fabs(omega) > v / self.min_radius:
-            if self.last_ms is not None:
-                self.cross_track_integral -= self.cross_track_err * dt
-                self.heading_integral -= self.heading_err * dt
-            omega = math.copysign(v / self.min_radius, omega)
+        idx_min_radius = torch.abs(omega) > v / self.min_radius
+        omega[idx_min_radius] = torch.abs(v[idx_min_radius] / self.min_radius) * torch.sign(omega[idx_min_radius])
+        
+        # if torch.abs(omega) > v / self.min_radius:
+        #     # if self.last_ms is not None:
+        #     #     self.cross_track_integral -= self.cross_track_err * dt
+        #     #     self.heading_integral -= self.heading_err * dt
+        #     omega = torch.abs(v / self.min_radius) * torch.sign(omega)
 
         #if not self.fsm_state == "SAFE_JOYSTICK_CONTROL":
         # apply integral correction (these should not affect radius, hence checked afterwards)
-        omega -= self.k_Id * (0.22/self.v_bar) * self.cross_track_integral
-        omega -= self.k_Iphi * (0.22/self.v_bar) * self.heading_integral
+        # omega -= self.k_Id * (0.22/self.v_bar) * self.cross_track_integral
+        # omega -= self.k_Iphi * (0.22/self.v_bar) * self.heading_integral
+        idx1 = v == 0
+        omega[idx1] = 0
 
-        if v == 0:
-            omega = 0
-        else:
-        # check if velocity is large enough such that car can actually execute desired omega
-            if v - 0.5 * math.fabs(omega) * 0.1 < 0.065:
-                v = 0.065 + 0.5 * math.fabs(omega) * 0.1
+        idx2 = v - 0.5 * torch.abs(omega) * 0.1 < 0.065
+
+        v[idx2 * (idx1==0)] = 0.065 + 0.5 * torch.abs(omega[idx2 * (idx1==0)]) * 0.1
+
+        # if v == 0:
+        #     omega = 0
+        # else:
+        # # check if velocity is large enough such that car can actually execute desired omega
+        #     if v - 0.5 * torch.abs(omega) * 0.1 < 0.065:
+        #         v = 0.065 + 0.5 * torch.abs(omega) * 0.1
 
         # apply magic conversion factors
         v = v * self.velocity_to_m_per_s
         omega = omega * self.omega_to_rad_per_s
 
-        if omega > self.omega_max: omega = self.omega_max
-        if omega < self.omega_min: omega = self.omega_min
+        omega=torch.clamp(omega, self.omega_min, self.omega_max)
+
+        # if omega > self.omega_max: omega = self.omega_max
+        # if omega < self.omega_min: omega = self.omega_min
         omega += self.omega_ff
         omega = omega
         self.last_ms = currentMillis
         
-        return v, omega
+        return torch.stack([v, omega], dim=-1).to(device)
 
     def angle_control_commands(self, dist, angle, controller='P'):
         return self.computeControlValues(dist, angle)

@@ -3,6 +3,7 @@ import random
 import numpy as np
 import torch
 import gym
+from gym import wrappers
 import gym_duckietown
 import os
 
@@ -43,6 +44,8 @@ env = ImgWrapper(env) # to make the images from 160x120x3 into 3x160x120
 env = ActionWrapper(env)
 env = DtRewardWrapper(env)
 env = SteeringToWheelVelWrapper(env)
+env = wrappers.Monitor(env, './gym_results', video_callable=lambda episode_id: True, force=True)
+
 
 
 # Set seeds
@@ -60,9 +63,8 @@ policy = DDPG(state_dim, action_dim, max_action)
 replay_buffer = ReplayBuffer(args.replay_buffer_max_size)
 
 # Evaluate untrained policy
-print('before')
-evaluations= [evaluate_policy(env, policy, device)]
-print('after t\'es lourd')
+# evaluations= [evaluate_policy(env, policy, device)]
+
 
 total_timesteps = 0
 timesteps_since_eval = 0
@@ -89,7 +91,10 @@ while total_timesteps < args.max_timesteps:
 
         # Reset environment
         env_counter += 1
+        # env.close()
         obs = env.reset()
+        # env.reset_video_recorder()
+        # env = wrappers.Monitor(env, './gym_results', video_callable=lambda episode_id: True, force=True)
         done = False
         episode_reward = 0
         episode_timesteps = 0
